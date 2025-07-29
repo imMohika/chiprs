@@ -1,17 +1,29 @@
+use crate::control_keys::{CONTROL_KEYS_WIDTH, draw_control_keys, handle_control_keys};
+use crate::draw::{ShapeDrawer, VERTICAL_LINE_WIDTH};
 use crate::emu::Emulator;
 use crate::emu::constants::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::emu::keys::ChipKey;
+use crate::keypad::{KEYPAD_HEIGHT, KEYPAD_WIDTH, draw_keypad};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
+use std::cmp::max;
 use std::env;
 use std::fs::File;
 use std::io::Read;
 
+mod control_keys;
+mod draw;
 mod emu;
+mod keypad;
+mod text;
 
-const SCALE: usize = 10;
-const WINDOW_WIDTH: usize = SCREEN_WIDTH * SCALE;
-const WINDOW_HEIGHT: usize = SCREEN_HEIGHT * SCALE;
-const TICKS_PER_FRAME: usize = 10;
+const TICKS_PER_FRAME: usize = 11;
+
+const EMU_SCALE: usize = 10;
+const EMU_WIDTH: usize = SCREEN_WIDTH * EMU_SCALE;
+const EMU_HEIGHT: usize = SCREEN_HEIGHT * EMU_SCALE;
+
+const GAP: usize = 8;
+const LINE_SCALE: usize = 4;
 
 fn main() {
     let args = env::args().collect::<Vec<_>>();
@@ -20,19 +32,21 @@ fn main() {
         return;
     }
 
-    let mut emu = Emulator::new();
-
     let mut rom = File::open(&args[1]).expect("unable to open rom");
     let mut buffer = Vec::new();
     rom.read_to_end(&mut buffer).expect("unable to read rom");
+
+    let mut emu = Emulator::new();
     emu.load(&buffer);
 
-    let mut window = Window::new(
-        "Chiprs",
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-        WindowOptions::default(),
-    )
+    let window_width =
+        EMU_WIDTH + GAP + VERTICAL_LINE_WIDTH + GAP + max(KEYPAD_WIDTH, CONTROL_KEYS_WIDTH) + GAP;
+    let window_height = EMU_HEIGHT;
+
+    let mut window = Window::new("Chiprs", window_width, window_height, WindowOptions {
+        resize: false,
+        ..WindowOptions::default()
+    })
     .unwrap_or_else(|e| {
         panic!("{}", e);
     });
@@ -40,7 +54,11 @@ fn main() {
     window.set_target_fps(60);
     window.set_background_color(0, 0, 0);
 
+    let shape_drawer = ShapeDrawer::new(window_width);
+
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        handle_control_keys(&window, &mut emu);
+
         window
             .get_keys_pressed(KeyRepeat::No)
             .iter()
@@ -61,34 +79,39 @@ fn main() {
             }
         });
 
-        let mut window_buffer: Vec<u32> = vec![0; WINDOW_WIDTH * WINDOW_HEIGHT];
+        let mut window_buffer: Vec<u32> = vec![0; window_width * window_height];
+        let mut curr_x = 0;
+        let mut curr_y = 0;
+
         for (i, pixel) in emu.get_screen().iter().enumerate() {
             if *pixel {
                 let x = i % SCREEN_WIDTH;
                 let y = i / SCREEN_WIDTH;
-                draw_rect(window_buffer.as_mut_slice(), x, y);
+                shape_drawer.rect(window_buffer.as_mut_slice(), x, y, EMU_SCALE);
             }
         }
+        curr_x = EMU_WIDTH + GAP;
+
+        shape_drawer.vertical_line(window_buffer.as_mut_slice(), curr_x, curr_y, EMU_HEIGHT);
+        curr_x += VERTICAL_LINE_WIDTH + GAP;
+
+        draw_keypad(
+            &shape_drawer,
+            window_buffer.as_mut_slice(),
+            &emu,
+            (curr_x, curr_y),
+        );
+        curr_y += KEYPAD_HEIGHT + GAP;
+
+        draw_control_keys(
+            shape_drawer.text(),
+            window_buffer.as_mut_slice(),
+            (curr_x, curr_y),
+        );
 
         window
-            .update_with_buffer(&window_buffer, WINDOW_WIDTH, WINDOW_HEIGHT)
+            .update_with_buffer(&window_buffer, window_width, window_height)
             .unwrap();
-    }
-}
-
-fn draw_rect(window_buffer: &mut [u32], x: usize, y: usize) {
-    let start_x = x * SCALE;
-    let start_y = y * SCALE;
-
-    for y_offset in 0..SCALE {
-        for x_offset in 0..SCALE {
-            let window_x = start_x + x_offset;
-            let window_y = start_y + y_offset;
-            let idx = window_y * WINDOW_WIDTH + window_x;
-
-            // Set the pixel color to white
-            window_buffer[idx] = 0x00FFFFFF;
-        }
     }
 }
 

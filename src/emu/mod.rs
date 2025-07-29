@@ -1,13 +1,14 @@
 pub mod constants;
-mod fontset;
+pub mod fontset;
 pub mod keys;
 
 use crate::emu::constants::{
     KEYPAD_SIZE, RAM_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH, STACK_SIZE, START_ADDR, V_SIZE,
 };
 use crate::emu::fontset::{FONTSET, FONTSET_SIZE};
-use rand::random;
 use crate::emu::keys::ChipKey;
+use rand::random;
+use std::collections::HashMap;
 
 pub struct Emulator {
     counter: u16,
@@ -92,7 +93,7 @@ impl Emulator {
     pub fn key_pressed(&mut self, key: ChipKey) {
         self.keys[key.to_hex() as usize] = true;
     }
-    
+
     pub fn key_released(&mut self, key: ChipKey) {
         let idx = key.to_hex();
         self.keys[idx as usize] = false;
@@ -100,6 +101,15 @@ impl Emulator {
             self.v_reg[x as usize] = idx;
             self.waiting_for_key_reg = None;
         }
+    }
+
+    pub fn key_states(&self) -> HashMap<ChipKey, bool> {
+        (0..16)
+            .map(|i| {
+                let key = ChipKey::from_hex(i as u8).unwrap();
+                (key, self.keys[i])
+            })
+            .collect()
     }
 
     fn fetch(&mut self) -> u16 {
