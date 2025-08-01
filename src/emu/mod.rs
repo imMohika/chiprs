@@ -1,18 +1,21 @@
 pub mod constants;
 pub mod fontset;
+pub mod instruction;
 pub mod keys;
 
 use crate::emu::constants::{
     KEYPAD_SIZE, RAM_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH, STACK_SIZE, START_ADDR, V_SIZE,
 };
 use crate::emu::fontset::{FONTSET, FONTSET_SIZE};
+use crate::emu::instruction::Instruction;
 use crate::emu::keys::ChipKey;
 use rand::random;
 use std::collections::HashMap;
 
 pub struct Emulator {
-    counter: u16,
+    pub counter: u16,
     ram: [u8; RAM_SIZE],
+    rom: Vec<u8>,
     screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT],
     v_reg: [u8; V_SIZE],
     i_reg: u16,
@@ -22,6 +25,8 @@ pub struct Emulator {
     waiting_for_key_reg: Option<u8>,
     delay_timer: u8,
     sound_timer: u8,
+
+    is_paused: bool,
 }
 
 impl Emulator {
@@ -29,6 +34,7 @@ impl Emulator {
         let mut emu = Self {
             counter: START_ADDR,
             ram: [0; RAM_SIZE],
+            rom: Vec::new(),
             screen: [false; SCREEN_WIDTH * SCREEN_HEIGHT],
             v_reg: [0; V_SIZE],
             i_reg: 0,
@@ -38,6 +44,7 @@ impl Emulator {
             waiting_for_key_reg: None,
             delay_timer: 0,
             sound_timer: 0,
+            is_paused: false,
         };
         emu.ram[..FONTSET_SIZE].copy_from_slice(&FONTSET);
 
@@ -58,23 +65,50 @@ impl Emulator {
         self.sound_timer = 0;
 
         self.ram[..FONTSET_SIZE].copy_from_slice(&FONTSET);
+        self.load_rom()
     }
 
-    pub fn load(&mut self, data: &[u8]) {
+    pub fn load(&mut self, rom: &[u8]) {
+        self.rom = rom.to_vec();
+        self.load_rom()
+    }
+
+    fn load_rom(&mut self) {
         let start = START_ADDR as usize;
-        self.ram[start..start + data.len()].copy_from_slice(data);
+        self.ram[start..start + self.rom.len()].copy_from_slice(&self.rom);
     }
 
     pub fn get_screen(&self) -> &[bool; SCREEN_WIDTH * SCREEN_HEIGHT] {
         &self.screen
     }
 
+    pub fn pause_or_resume(&mut self) {
+        self.is_paused = !self.is_paused;
+    }
+    pub fn is_paused(&self) -> bool {
+        self.is_paused
+    }
+
     pub fn tick(&mut self) {
+        if self.is_paused {
+            return;
+        }
+        self.next()
+    }
+
+    pub fn next(&mut self) {
         if self.waiting_for_key_reg.is_some() {
             return;
         }
-        let op = self.fetch();
-        self.execute(op);
+        let instruction = self.fetch(self.counter as usize);
+        self.counter += 2;
+
+        self.execute(instruction);
+    }
+
+    pub fn previous(&mut self) {
+        self.counter -= 4;
+        self.next()
     }
 
     pub fn tick_timers(&mut self) {
@@ -112,143 +146,140 @@ impl Emulator {
             .collect()
     }
 
-    fn fetch(&mut self) -> u16 {
-        let higher = self.ram[self.counter as usize] as u16;
-        let lower = self.ram[self.counter as usize + 1] as u16;
-        self.counter += 2;
+    pub fn fetch(&self, at: usize) -> Instruction {
+        let higher = self.ram[at] as u16;
+        let lower = self.ram[at + 1] as u16;
 
         let op = (higher << 8) | lower;
-        op
+        Instruction::from_opcode(op)
     }
 
-    fn execute(&mut self, op: u16) {
-        let d1 = ((op & 0xF000) >> 12) as u8;
-        let d2 = ((op & 0x0F00) >> 8) as u8;
-        let d3 = ((op & 0x00F0) >> 4) as u8;
-        let d4 = (op & 0x000F) as u8;
-
-        match (d1, d2, d3, d4) {
-            // 0000: NOP
-            (0, 0, 0, 0) => (),
-            // 00E0: Clear screen
-            (0, 0, 0xE, 0) => {
+    fn execute(&mut self, instruction: Instruction) {
+        match instruction {
+            Instruction::Nop => (),
+            Instruction::ClearScreen => {
                 self.screen = [false; SCREEN_WIDTH * SCREEN_HEIGHT];
             }
-            // 1NNN: jump
-            (1, _, _, _) => self.counter = op & 0xFFF,
-            // BNNN: jump to NNN + V0
-            (0xB, _, _, _) => self.counter = (op & 0xFFF) + self.v_reg[0] as u16,
-
-            // 00EE: return from a subroutine
-            (0, 0, 0xE, 0xE) => self.counter = self.pop(),
-            // 2NNN: execute subroutine
-            (2, _, _, _) => {
+            Instruction::Ret => self.counter = self.pop(),
+            Instruction::Jump { nnn } => self.counter = nnn,
+            Instruction::JumpPlusV0 { nnn } => self.counter = nnn + self.v_reg[0] as u16,
+            Instruction::Call { nnn } => {
                 self.push(self.counter);
-                self.counter = op & 0xFFF
+                self.counter = nnn
             }
-
-            // 3XNN: skip if vx == nn
-            (3, _, _, _) => {
-                let nn = (op & 0xFF) as u8;
-                if self.v_reg[d2 as usize] == nn {
+            Instruction::SkipVxEqNN { x, nn } => {
+                if self.v_reg[x] == nn {
                     self.counter += 2;
                 }
             }
-            // 4XNN: skip if vx != nn
-            (4, _, _, _) => {
-                let nn = (op & 0xFF) as u8;
-                if self.v_reg[d2 as usize] != nn {
+            Instruction::SkipVxNeqNN { x, nn } => {
+                if self.v_reg[x] != nn {
                     self.counter += 2;
                 }
             }
-            // 5XY0: skip if vx == vy
-            (5, _, _, _) => {
-                if self.v_reg[d2 as usize] == self.v_reg[d3 as usize] {
+            Instruction::SkipVxEqVy { x, y } => {
+                if self.v_reg[x] == self.v_reg[y] {
                     self.counter += 2;
                 }
             }
-            // 9XY0: skip if vx == vy
-            (9, _, _, _) => {
-                if self.v_reg[d2 as usize] != self.v_reg[d3 as usize] {
+            Instruction::SkipVxNeqVy { x, y } => {
+                if self.v_reg[x] != self.v_reg[y] {
                     self.counter += 2;
                 }
             }
-
-            // 6XNN: set register VX
-            (6, _, _, _) => {
-                self.v_reg[d2 as usize] = (op & 0xFF) as u8;
+            Instruction::SetVxNN { x, nn } => {
+                self.v_reg[x] = nn;
             }
-            // 7XNN: add value to register VX
-            (7, _, _, _) => {
-                let nn = (op & 0xFF) as u8;
-                self.v_reg[d2 as usize] = self.v_reg[d2 as usize].wrapping_add(nn);
+            Instruction::SetVxVy { x, y } => {
+                self.v_reg[x] = self.v_reg[y];
             }
-
-            // 8XY0: store the value of VY in VX
-            (8, _, _, 0) => {
-                self.v_reg[d2 as usize] = self.v_reg[d3 as usize];
+            Instruction::SetVxDt { x } => {
+                self.v_reg[x] = self.delay_timer;
             }
-            // 8XY1: Set VX to VX or VY
-            (8, _, _, 1) => {
-                self.v_reg[d2 as usize] |= self.v_reg[d3 as usize];
+            Instruction::SetVxKey { x } => {
+                self.waiting_for_key_reg = Some(x as u8);
             }
-            // 8XY2: Set VX to VX AND VY
-            (8, _, _, 2) => {
-                self.v_reg[d2 as usize] &= self.v_reg[d3 as usize];
+            Instruction::SetVxRnd { x, nn } => {
+                let rnd: u8 = random();
+                self.v_reg[x] = rnd & nn;
             }
-            // 8XY3: Set VX to VX XOR VY
-            (8, _, _, 3) => {
-                self.v_reg[d2 as usize] ^= self.v_reg[d3 as usize];
+            Instruction::SetI { nnn } => {
+                self.i_reg = nnn;
             }
-            // 8XY4: Add VY to VX
-            (8, _, _, 4) => {
-                let (vx, carry) = self.v_reg[d2 as usize].overflowing_add(self.v_reg[d3 as usize]);
-                self.v_reg[d2 as usize] = vx;
+            Instruction::SetVxFontToI { x } => self.i_reg = (self.v_reg[x] * 5) as u16,
+            Instruction::SetVxBcdToI { x } => {
+                let vx = self.v_reg[x];
+                self.ram[self.i_reg as usize] = vx / 100;
+                self.ram[self.i_reg as usize + 1] = (vx / 10) % 10;
+                self.ram[self.i_reg as usize + 2] = vx % 10;
+            }
+            Instruction::SetDtVx { x } => {
+                self.delay_timer = self.v_reg[x];
+            }
+            Instruction::SetStVx { x } => {
+                self.sound_timer = self.v_reg[x];
+            }
+            Instruction::AddVxNN { x, nn } => {
+                self.v_reg[x] = self.v_reg[x].wrapping_add(nn);
+            }
+            Instruction::AddVxVy { x, y } => {
+                let (vx, carry) = self.v_reg[x].overflowing_add(self.v_reg[y]);
+                self.v_reg[x] = vx;
                 self.v_reg[0xF] = if carry { 1 } else { 0 };
             }
-            // 8XY5: Sub VY from VX
-            (8, _, _, 5) => {
-                let (vx, borrow) = self.v_reg[d2 as usize].overflowing_sub(self.v_reg[d3 as usize]);
-                self.v_reg[d2 as usize] = vx;
+            Instruction::SubVxVy { x, y } => {
+                let (vx, borrow) = self.v_reg[x].overflowing_sub(self.v_reg[y]);
+                self.v_reg[x] = vx;
                 self.v_reg[0xF] = if borrow { 0 } else { 1 };
             }
-            // 8XY6: right shift VX
-            (8, _, _, 6) => {
+            Instruction::SubVyVx { x, y } => {
+                let (vx, borrow) = self.v_reg[y].overflowing_sub(self.v_reg[x]);
+                self.v_reg[x] = vx;
+                self.v_reg[0xF] = if borrow { 0 } else { 1 };
+            }
+            Instruction::AddVxToI { x } => {
+                self.i_reg = self.i_reg.wrapping_add(self.v_reg[x] as u16)
+            }
+            Instruction::OrVxVy { x, y } => {
+                self.v_reg[x] |= self.v_reg[y];
+            }
+            Instruction::AndVxVy { x, y } => {
+                self.v_reg[x] &= self.v_reg[y];
+            }
+            Instruction::XorVxVy { x, y } => {
+                self.v_reg[x] ^= self.v_reg[y];
+            }
+            Instruction::RShiftVx { x, y } => {
                 // starting with CHIP-48 and SUPER-CHIP in the early 1990s, these instructions were changed so that they shifted VX in place, and ignored the Y completely.
-                self.v_reg[d2 as usize] = self.v_reg[d3 as usize];
-                let least_sig = self.v_reg[d2 as usize] & 1;
-                self.v_reg[d2 as usize] >>= 1;
+                self.v_reg[x] = self.v_reg[y];
+                let least_sig = self.v_reg[x] & 1;
+                self.v_reg[x] >>= 1;
                 self.v_reg[0xF] = least_sig;
             }
-            // 8XYE: left shift VX
-            (8, _, _, 0xE) => {
-                self.v_reg[d2 as usize] = self.v_reg[d3 as usize];
-                let most_sig = (self.v_reg[d2 as usize] >> 7) & 1;
-                self.v_reg[d2 as usize] <<= 1;
+            Instruction::LShiftVx { x, y } => {
+                self.v_reg[x] = self.v_reg[y];
+                let most_sig = (self.v_reg[x] >> 7) & 1;
+                self.v_reg[x] <<= 1;
                 self.v_reg[0xF] = most_sig;
             }
-
-            // 8XY7: set VX to VY - VX
-            (8, _, _, 7) => {
-                let (vx, borrow) = self.v_reg[d3 as usize].overflowing_sub(self.v_reg[d2 as usize]);
-                self.v_reg[d2 as usize] = vx;
-                self.v_reg[0xF] = if borrow { 0 } else { 1 };
+            Instruction::SkipVxDown { x } => {
+                let vx = self.v_reg[x];
+                let key = self.keys[vx as usize];
+                if key {
+                    self.counter += 2;
+                }
             }
-
-            // ANNN: set index register I
-            (0xA, _, _, _) => {
-                self.i_reg = op & 0xFFF;
+            Instruction::SkipVxUp { x } => {
+                let vx = self.v_reg[x];
+                let key = self.keys[vx as usize];
+                if !key {
+                    self.counter += 2;
+                }
             }
-            // CXNN: VX = rand & NN
-            (0xC, _, _, _) => {
-                let rnd: u8 = random();
-                self.v_reg[d2 as usize] = rnd & (op & 0xFF) as u8;
-            }
-            // DXYN: display/draw
-            (0xD, _, _, _) => {
-                let x_cord = self.v_reg[d2 as usize] as usize;
-                let y_cord = self.v_reg[d3 as usize] as usize;
-                let rows = d4;
+            Instruction::Draw { x, y, n } => {
+                let x_cord = self.v_reg[x] as usize;
+                let y_cord = self.v_reg[y] as usize;
+                let rows = n;
 
                 let mut any_flipped = false;
                 for y_line in 0..rows {
@@ -268,66 +299,19 @@ impl Emulator {
 
                 self.v_reg[0xF] = if any_flipped { 1 } else { 0 };
             }
-            // EX9E: skip if VX key is pressed
-            (0xE, _, 9, 0xE) => {
-                let vx = self.v_reg[d2 as usize];
-                let key = self.keys[vx as usize];
-                if key {
-                    self.counter += 2;
-                }
-            }
-            // EXA1: skip if VX key is not pressed
-            (0xE, _, 0xA, 1) => {
-                let vx = self.v_reg[d2 as usize];
-                let key = self.keys[vx as usize];
-                if !key {
-                    self.counter += 2;
-                }
-            }
-            // FX0A: get key
-            (0xF, _, 0, 0xA) => {
-                self.waiting_for_key_reg = Some(d2);
-            }
-
-            // FX07: store delay timer in VX
-            (0xF, _, 0, 7) => {
-                self.v_reg[d2 as usize] = self.delay_timer;
-            }
-            // FX15: delay timer = VX
-            (0xF, _, 1, 5) => {
-                self.delay_timer = self.v_reg[d2 as usize];
-            }
-            // FX18: sound timer = VX
-            (0xF, _, 1, 8) => {
-                self.sound_timer = self.v_reg[d2 as usize];
-            }
-            // FX1E: add VX to I
-            (0xF, _, 1, 0xE) => {
-                self.i_reg = self.i_reg.wrapping_add(self.v_reg[d2 as usize] as u16)
-            }
-            // FX29: font character
-            (0xF, _, 2, 9) => self.i_reg = (self.v_reg[d2 as usize] * 5) as u16,
-            // FX33: binary-coded decimal conversion
-            (0xF, _, 3, 3) => {
-                let vx = self.v_reg[d2 as usize];
-                self.ram[self.i_reg as usize] = vx / 100;
-                self.ram[self.i_reg as usize + 1] = (vx / 10) % 10;
-                self.ram[self.i_reg as usize + 2] = vx % 10;
-            }
-            // FX55: save V0..VX into I
-            (0xF, _, 5, 5) => {
-                for idx in 0..=d2 as usize {
+            Instruction::SaveVx { x } => {
+                for idx in 0..=x {
                     self.ram[self.i_reg as usize + idx] = self.v_reg[idx]
                 }
             }
-            // FX65: load I into V0..VX
-            (0xF, _, 6, 5) => {
-                for idx in 0..=d2 as usize {
+            Instruction::LoadVx { x } => {
+                for idx in 0..=x {
                     self.v_reg[idx] = self.ram[self.i_reg as usize + idx]
                 }
             }
-
-            (_, _, _, _) => unimplemented!("unimplemented operation: {:#04x}", op),
+            Instruction::Unknown { opcode } => {
+                unimplemented!("unimplemented operation: {:#04x}", opcode)
+            }
         }
     }
 

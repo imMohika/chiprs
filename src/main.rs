@@ -1,11 +1,12 @@
-use crate::control_keys::{CONTROL_KEYS_WIDTH, draw_control_keys, handle_control_keys};
-use crate::draw::{ShapeDrawer, VERTICAL_LINE_WIDTH};
-use crate::emu::Emulator;
+use crate::control_keys::{draw_control_keys, handle_control_keys, CONTROL_KEYS_HEIGHT};
+use crate::draw::{ShapeDrawer, LINE_SIZE};
 use crate::emu::constants::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::emu::keys::ChipKey;
-use crate::keypad::{KEYPAD_HEIGHT, KEYPAD_WIDTH, draw_keypad};
+use crate::emu::Emulator;
+use crate::instruction_list::draw_instruction_list;
+use crate::keypad::{draw_keypad, KEYPAD_HEIGHT, KEYPAD_WIDTH};
+use crate::text::CHAR_SIZE;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
-use std::cmp::max;
 use std::env;
 use std::fs::File;
 use std::io::Read;
@@ -13,6 +14,7 @@ use std::io::Read;
 mod control_keys;
 mod draw;
 mod emu;
+mod instruction_list;
 mod keypad;
 mod text;
 
@@ -39,9 +41,8 @@ fn main() {
     let mut emu = Emulator::new();
     emu.load(&buffer);
 
-    let window_width =
-        EMU_WIDTH + GAP + VERTICAL_LINE_WIDTH + GAP + max(KEYPAD_WIDTH, CONTROL_KEYS_WIDTH) + GAP;
-    let window_height = EMU_HEIGHT;
+    let window_width = EMU_WIDTH + GAP + LINE_SIZE + GAP + (CHAR_SIZE * 40) + GAP;
+    let window_height = EMU_HEIGHT + GAP + LINE_SIZE + GAP + KEYPAD_HEIGHT + GAP;
 
     let mut window = Window::new("Chiprs", window_width, window_height, WindowOptions {
         resize: false,
@@ -80,9 +81,6 @@ fn main() {
         });
 
         let mut window_buffer: Vec<u32> = vec![0; window_width * window_height];
-        let mut curr_x = 0;
-        let mut curr_y = 0;
-
         for (i, pixel) in emu.get_screen().iter().enumerate() {
             if *pixel {
                 let x = i % SCREEN_WIDTH;
@@ -90,24 +88,50 @@ fn main() {
                 shape_drawer.rect(window_buffer.as_mut_slice(), x, y, EMU_SCALE);
             }
         }
-        curr_x = EMU_WIDTH + GAP;
 
-        shape_drawer.vertical_line(window_buffer.as_mut_slice(), curr_x, curr_y, EMU_HEIGHT);
-        curr_x += VERTICAL_LINE_WIDTH + GAP;
+        shape_drawer.vertical_line(
+            window_buffer.as_mut_slice(),
+            EMU_WIDTH + GAP,
+            0,
+            EMU_HEIGHT + GAP,
+        );
+        shape_drawer.horizontal_line(
+            window_buffer.as_mut_slice(),
+            (0, EMU_WIDTH + GAP + LINE_SIZE),
+            EMU_HEIGHT + GAP,
+        );
+
+        draw_instruction_list(
+            window_buffer.as_mut_slice(),
+            &emu,
+            &shape_drawer,
+            (EMU_WIDTH + GAP + LINE_SIZE + GAP, GAP),
+        );
 
         draw_keypad(
             &shape_drawer,
             window_buffer.as_mut_slice(),
             &emu,
-            (curr_x, curr_y),
+            (GAP, EMU_HEIGHT + GAP + LINE_SIZE + GAP),
         );
-        curr_y += KEYPAD_HEIGHT + GAP;
 
         draw_control_keys(
             shape_drawer.text(),
             window_buffer.as_mut_slice(),
-            (curr_x, curr_y),
+            (GAP + KEYPAD_WIDTH + GAP, EMU_HEIGHT + GAP + LINE_SIZE + GAP),
         );
+
+        if emu.is_paused() {
+            shape_drawer.text().draw(
+                window_buffer.as_mut_slice(),
+                (
+                    GAP + KEYPAD_WIDTH + GAP,
+                    EMU_HEIGHT + GAP + LINE_SIZE + GAP + CONTROL_KEYS_HEIGHT,
+                ),
+                1,
+                "PAUSED",
+            )
+        }
 
         window
             .update_with_buffer(&window_buffer, window_width, window_height)

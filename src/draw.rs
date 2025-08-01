@@ -2,7 +2,7 @@ use crate::text::TextDrawer;
 
 pub const FOREGROUND: u32 = 0x00FFFFFF; // white
 
-pub const VERTICAL_LINE_WIDTH: usize = 4;
+pub const LINE_SIZE: usize = 4;
 pub const BORDER_WIDTH: usize = 2;
 pub struct ShapeDrawer {
     width: usize,
@@ -46,8 +46,25 @@ impl ShapeDrawer {
         let start_x = x;
 
         for y in from_y..to_y {
-            for x_offset in 0..VERTICAL_LINE_WIDTH {
+            for x_offset in 0..LINE_SIZE {
                 let x = start_x + x_offset;
+                let idx = y * self.width + x;
+                window_buffer[idx] = FOREGROUND;
+            }
+        }
+    }
+
+    pub fn horizontal_line(
+        &self,
+        window_buffer: &mut [u32],
+        (from_x,to_x): (usize, usize),
+        y: usize,
+    ) {
+        let start_y = y;
+
+        for x in from_x..to_x {
+            for y_offset in 0..LINE_SIZE {
+                let y = start_y + y_offset;
                 let idx = y * self.width + x;
                 window_buffer[idx] = FOREGROUND;
             }
