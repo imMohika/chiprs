@@ -1,4 +1,4 @@
-use crate::draw::FOREGROUND;
+use crate::ui::draw::FOREGROUND;
 
 pub const CHAR_SIZE: usize = 8;
 pub struct TextDrawer {

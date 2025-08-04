@@ -4,7 +4,7 @@ pub mod instruction;
 pub mod keys;
 
 use crate::emu::constants::{
-    KEYPAD_SIZE, RAM_SIZE, SCREEN_HEIGHT, SCREEN_WIDTH, STACK_SIZE, START_ADDR, V_SIZE,
+    EMU_SCREEN_HEIGHT, EMU_SCREEN_WIDTH, KEYPAD_SIZE, RAM_SIZE, STACK_SIZE, START_ADDR, V_SIZE,
 };
 use crate::emu::fontset::{FONTSET, FONTSET_SIZE};
 use crate::emu::instruction::Instruction;
@@ -16,7 +16,7 @@ pub struct Emulator {
     pub counter: u16,
     ram: [u8; RAM_SIZE],
     rom: Vec<u8>,
-    screen: [bool; SCREEN_WIDTH * SCREEN_HEIGHT],
+    screen: [bool; EMU_SCREEN_WIDTH * EMU_SCREEN_HEIGHT],
     v_reg: [u8; V_SIZE],
     i_reg: u16,
     stack: [u16; STACK_SIZE],
@@ -35,7 +35,7 @@ impl Emulator {
             counter: START_ADDR,
             ram: [0; RAM_SIZE],
             rom: Vec::new(),
-            screen: [false; SCREEN_WIDTH * SCREEN_HEIGHT],
+            screen: [false; EMU_SCREEN_WIDTH * EMU_SCREEN_HEIGHT],
             v_reg: [0; V_SIZE],
             i_reg: 0,
             stack: [0; STACK_SIZE],
@@ -54,7 +54,7 @@ impl Emulator {
     pub fn reset(&mut self) {
         self.counter = START_ADDR;
         self.ram = [0; RAM_SIZE];
-        self.screen = [false; SCREEN_WIDTH * SCREEN_HEIGHT];
+        self.screen = [false; EMU_SCREEN_WIDTH * EMU_SCREEN_HEIGHT];
         self.v_reg = [0; V_SIZE];
         self.i_reg = 0;
         self.stack = [0; STACK_SIZE];
@@ -78,7 +78,7 @@ impl Emulator {
         self.ram[start..start + self.rom.len()].copy_from_slice(&self.rom);
     }
 
-    pub fn get_screen(&self) -> &[bool; SCREEN_WIDTH * SCREEN_HEIGHT] {
+    pub fn get_screen(&self) -> &[bool; EMU_SCREEN_WIDTH * EMU_SCREEN_HEIGHT] {
         &self.screen
     }
 
@@ -104,11 +104,6 @@ impl Emulator {
         self.counter += 2;
 
         self.execute(instruction);
-    }
-
-    pub fn previous(&mut self) {
-        self.counter -= 4;
-        self.next()
     }
 
     pub fn tick_timers(&mut self) {
@@ -158,7 +153,7 @@ impl Emulator {
         match instruction {
             Instruction::Nop => (),
             Instruction::ClearScreen => {
-                self.screen = [false; SCREEN_WIDTH * SCREEN_HEIGHT];
+                self.screen = [false; EMU_SCREEN_WIDTH * EMU_SCREEN_HEIGHT];
             }
             Instruction::Ret => self.counter = self.pop(),
             Instruction::Jump { nnn } => self.counter = nnn,
@@ -287,9 +282,9 @@ impl Emulator {
                     for x_line in 0..8 {
                         // Only flip if current pixel's bit is 1
                         if pixels & (0b10000000 >> x_line) != 0 {
-                            let x = (x_cord + x_line) % SCREEN_WIDTH;
-                            let y = (y_cord + y_line as usize) % SCREEN_HEIGHT;
-                            let idx = x + SCREEN_WIDTH * y;
+                            let x = (x_cord + x_line) % EMU_SCREEN_WIDTH;
+                            let y = (y_cord + y_line as usize) % EMU_SCREEN_HEIGHT;
+                            let idx = x + EMU_SCREEN_WIDTH * y;
 
                             any_flipped |= self.screen[idx];
                             self.screen[idx] ^= true;

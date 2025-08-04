@@ -1,9 +1,10 @@
-use crate::text::TextDrawer;
+use crate::ui::text::TextDrawer;
 
 pub const FOREGROUND: u32 = 0x00FFFFFF; // white
 
-pub const LINE_SIZE: usize = 4;
-pub const BORDER_WIDTH: usize = 2;
+pub const GAP: usize = 4;
+pub const LINE_SIZE: usize = 2;
+pub const BORDER_WIDTH: usize = 1;
 pub struct ShapeDrawer {
     width: usize,
     text_drawer: TextDrawer,
@@ -57,7 +58,7 @@ impl ShapeDrawer {
     pub fn horizontal_line(
         &self,
         window_buffer: &mut [u32],
-        (from_x,to_x): (usize, usize),
+        (from_x, to_x): (usize, usize),
         y: usize,
     ) {
         let start_y = y;
@@ -72,12 +73,10 @@ impl ShapeDrawer {
     }
 
     pub fn border(
-        self: &Self,
+        &self,
         window_buffer: &mut [u32],
-        from_x: usize,
-        from_y: usize,
-        to_x: usize,
-        to_y: usize,
+        (from_x, from_y): (usize, usize),
+        (to_x, to_y): (usize, usize),
     ) {
         for y in from_y..to_y {
             for x in from_x..to_x {
